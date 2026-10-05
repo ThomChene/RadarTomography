@@ -1,10 +1,13 @@
-use ndarray::{arr1, arr2};
-use radar_and_tomography::algorithms::beamforming::Beamforming;
-use radar_and_tomography::map::face::{Neutral, Receiver, TypeFace};
+use ndarray::arr1;
+use radar_and_tomography::map::face::{Receiver, TypeFace};
 use radar_and_tomography::map::raytracing;
-use radar_and_tomography::plot::plot_map::plot_map;
-use radar_and_tomography::{algorithms::signal::Signal, map::object::{Object,Transmitter}};
+use radar_and_tomography::map::object;
+use radar_and_tomography::map::object::{Object,Transmitter};
+use radar_and_tomography::algorithms::signal as signal;
+
+use radar_and_tomography::plot as plot;
 use std::f64::consts::PI as Pi;
+use indicatif::{ProgressBar, ProgressStyle};
 
 // Todo:
 // Check R star
@@ -12,93 +15,88 @@ use std::f64::consts::PI as Pi;
 // conditions pour lesquelles face est une ligne en fonction du cross product
 // add sized to faces?
 // look at rayon
-// finish create rays with beamforming
-// add objects
-// plot objects
-// plot rays
+// creer nouvelle fonction pour creer les positions du trans
+// plot signal reçu, plot matched avec chirp, plot image raw, plot image transformée par SAR si ligne droite, plot tomography sinon
 
 fn main() {
+    const SPEED_OF_LIGHT: f64 = 299_792_458.0;
+    const SAMPLING_RATE: f64 = 2.0*1e7;
+    const F_MAX_CHIRP: f64 = 1e7;
+    const N_SAMPLES_CHIRP: usize = (SAMPLING_RATE*3.0/1e5).floor() as usize;
     let n_receiver = 1;
-    let n_rays = 10;
+    let n_rays = 100;
     let min_amplitude_ray = 1e-12;
 
-    // Create map with unmovable objects
-    let mut map = Vec::new();
+    // 1. Define the terrain bounds
+    let min_x = -1000.0;
+    let max_x = 1000.0;
+    let min_y = -1000.0;
+    let max_y = 1000.0;
+    let min_z = 0.0;
+    let max_z = 0.0;
 
-    let x_1 = -1000.0;
-    let x_2 = 1000.0;
-    let y_1 = -1000.0;
-    let y_2 = 1000.0;
-    let z_1 = 0.0;
+    let bounds_min = arr1(&[min_x, min_y, min_z]);
+    let bounds_max = arr1(&[max_x, max_y, max_z]);
 
-    let p1 = arr1(&[x_1,y_1,z_1]);
-    let p2 = arr1(&[x_2,y_1,z_1]);
-    let p3 = arr1(&[x_1,y_2,z_1]);
+    // 2. Generate the random mountain map
+    let mut map = Object::generate_mountain_map(
+        15,            // 15 mountains
+        bounds_min, 
+        bounds_max, 
+        100.0,          // min radius
+        500.0,          // max radius
+        50.0,          // min height
+        100.0,          // max height
+        12,            // min sides (square-ish)
+        48,            // max sides (round cone)
+        1.0            // attenuation
+    );
 
-    let neutral = Neutral::new(1.0);
-    let neutral_points = Object::parallelogram_points(vec!(p1,p2,p3));
-    let neutral_object = Object::new(vec!(neutral_points), vec!(TypeFace::Neutral(neutral)));
-
-    map.push(neutral_object);
-
-    let length_x_transceiver = 10.0;
-    let length_y_transceiver = 10.0;
+    let length_x_transceiver = 2.0;
+    let length_y_transceiver = 1.0;
     let wavelength = 0.1;
-    let precision = (100,100);
+    let precision = (500,500);
     let theta_transceiver = Pi*4.0/5.0;
     let phi_transceiver = Pi/5.0;
 
-    let max_x_i = 2;
+    let max_x_i = 100;
     let max_y_i = 1;
-    let min_x = 0.0;
-    let max_x = 100.0;
+    let min_x = -1000.0;
+    let max_x = 1000.0;
     let min_y = 0.0;
-    let max_y = 100.0;
-    let z = 100.0;
-    let mut positions = Vec::new();
-    for x_i in 0..max_x_i{
-        for y_i in 0..max_y_i{
-            let x = min_x + (max_x - min_x)*f64::from(x_i/max_x_i);
-            let y = min_y + (max_y - min_y)*f64::from(y_i/max_y_i);
+    let max_y = 0.0;
+    let z = 2000.0;
 
-            // Matrices to apply a rotation around axis y, then around z
-            let mat_rotation_y = arr2(&[
-                [theta_transceiver.cos(),0.0,theta_transceiver.sin()],
-                [0.0,1.0,0.0],
-                [-theta_transceiver.sin(),0.0,theta_transceiver.cos()]]);
-            let mat_rotation_z = arr2(&[
-                [phi_transceiver.cos(),-phi_transceiver.sin(),0.0],
-                [phi_transceiver.sin(),phi_transceiver.cos(),0.0],
-                [0.0,0.0,1.0]]);
+    let positions = object::get_positions(max_x_i, max_y_i, min_x, max_x, min_y, max_y, z, theta_transceiver, phi_transceiver, length_x_transceiver, length_y_transceiver, wavelength, precision);
 
-            let positions_3_points = arr2(&[
-                [-length_x_transceiver/2.0,-length_y_transceiver/2.0,0.0],
-                [length_x_transceiver/2.0,-length_y_transceiver/2.0,0.0],
-                [-length_x_transceiver/2.0,length_y_transceiver/2.0,0.0]]);
+    let my_signal = signal::Signal::create_chirp(0.0, F_MAX_CHIRP, N_SAMPLES_CHIRP, SAMPLING_RATE, 1.0);
+    // 1. Plot the constellation of a chirp
+    plot::plot_signal::plot_signal(&my_signal, "chirp_time.png", plot::plot_signal::PlotMode::RealImag, "Chirp in time");
 
-            // Center of the transceiver
-            let position_center = arr1(&[x,y,z]);
+    // 2. Plot the waveform (Amplitude and Phase)
+    plot::plot_signal::plot_signal(&my_signal, "waveform.png", plot::plot_signal::PlotMode::MagnitudePhase, "Time Domain Waveform");
 
-            let positions_3_points_rotated = positions_3_points.dot(&mat_rotation_y.t()).dot(&mat_rotation_z.t());
+    // 3. Plot the spectrum after FFT
+    let spectrum = my_signal.fft();
+    plot::plot_signal::plot_signal(&spectrum, "spectrum.png", plot::plot_signal::PlotMode::Spectrum, "Frequency Spectrum");
 
-            let (vec,_) = positions_3_points_rotated.into_raw_vec_and_offset();
+    // 4. Plot the spectrum after IFFT
+    let new_signal = spectrum.ifft();
+    plot::plot_signal::plot_signal(&new_signal, "new_waveform.png", plot::plot_signal::PlotMode::RealImag, "Time Domain Waveform");
 
-            let position_bottom_left = arr1(&vec[0..3]) + &position_center;
-            let position_bottom_right = arr1(&vec[3..6]) + &position_center;
-            let position_top_right = arr1(&vec[6..9]) + &position_center;
+    let mut all_received_signals = Vec::new();
+    let mut all_rays_to_plot = Vec::new();
 
-            let beamforming = Beamforming::new_rectangular_antenna(length_x_transceiver, length_y_transceiver, wavelength, precision);
+    let pb = ProgressBar::new(positions.len() as u64);
+    pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len} ({eta})")
+        .unwrap()
+        .progress_chars("#>-"));
 
-            positions.push((position_center, (phi_transceiver, theta_transceiver), vec!(position_bottom_left, position_bottom_right, position_top_right), beamforming));
-        }
-    } 
-
-    //let vec_impulsional_response = Vec::new();
     for position in positions{
+        pb.inc(1);
         let (position_center, phi_theta, position_receiver, beamforming) = position;
-        // Create transmitter
-        let _signal_received = Signal::new(1.0);
 
+        // Create transmitter
         let transmitter = Transmitter::new(beamforming, position_center, phi_theta);
 
         let receiver = Receiver::new(0);
@@ -108,13 +106,43 @@ fn main() {
 
         map.push(receiver_object);
 
-        let (_all_amplitudes, _all_distances, coordinates_rays_to_plot) = raytracing::raytracing(n_rays, n_receiver, &transmitter, &map, min_amplitude_ray);
-
-        //println!("{:?}\n",coordinates_rays_to_plot);
+        let (all_amplitudes, all_distances, rays_to_plot) = raytracing::raytracing(n_rays, n_receiver, &transmitter, &map, min_amplitude_ray);
 
         map.pop();
+        for rays in rays_to_plot{
+            all_rays_to_plot.push(rays);
+        }
 
-        //vec_impulsional_response.push(transceiver.impulsional_response());
+        let impulsional_response_receivers = signal::convert_raytracing_to_signals(all_amplitudes, all_distances, SAMPLING_RATE, SPEED_OF_LIGHT);
+
+        // Collect the raw signal at this receiver position
+        all_received_signals.push(impulsional_response_receivers[0].clone());
     }
-    let _x = plot_map();
+    pb.finish_with_message("done");
+
+
+    // --- SAR Processing ---
+    // 1. Generate the SAR image 
+    let sar_image = signal::create_sar_image(&all_received_signals, &my_signal);
+
+    // 2. Plot the SAR image
+    plot::plot_signal::plot_image(&sar_image, "sar_image.png", "SAR Image (Matched Filter Magnitude)");
+
+    // 3. Plot the actual rays (using the rays you collected)
+    plot::plot_beamforming::plot_ray_directions_3d(&all_rays_to_plot, "realized_rays.gif");
+
+    // 4. Plot the map
+    //plot::plot_map::plot_map_with_objects(all_rays_to_plot, &map); 
+    plot::plot_map::plot_map_with_objects(None, &map); 
+
+    let synthesized_image = radar_and_tomography::algorithms::sar::synthesis(
+           &sar_image,
+           (max_x - min_x) / f64::from(max_x_i), // step
+           2000.0, // length_synthetic
+           z, // distance_antenna
+           SPEED_OF_LIGHT,
+           SAMPLING_RATE,
+       );
+    plot::plot_signal::plot_image(&synthesized_image, "synthesized_image.png", "Synthesized Image");
+
 }

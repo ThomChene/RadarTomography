@@ -47,6 +47,10 @@ impl<T:NdFloat> Ray<T>{
         }
     }
 
+    /// Returns new reflected rays that will later be propagated or no rays if there are no objects in the direction of the ray,
+    /// and also an option that corresponds to:
+    /// 1) The amplitude and distance of the ray when it touches a receiver 
+    /// 2) None else
     pub fn propagate(self,faces: &Vec<&Face<T>>)->(Vec<Ray<T>>,Option<(T,T,usize)>)
     {
         let mut closest_dist = T::max_value();
@@ -62,8 +66,8 @@ impl<T:NdFloat> Ray<T>{
             if !other_offset.is_zero(){
                 let a = -(new_offset/other_offset);
                 intersection_face_ray = &self.direction*a + &self.origin;
-                // Checks that the intersection is in the direction of propagation of the ray and not behind the transmitter or the transmitter
-                if T::zero()<a{
+                // Checks that the intersection is in the direction of propagation of the ray and not behind the transmitter or too closed
+                if T::from(1e-2).unwrap()<a{
                     // Then check if the intersection is inside the triangle which means intersection_face_ray-P1 = lambda1*(P2-P1)+lambda2*(P3-P1), with 0<lambda1+lambda2<1, and 0<lambda1<1 and and 0<lambda2<1
                     // By computing <intersection_face_ray-P1,P2-P1> and <intersection_face_ray-P1,P3-P1> we obtain a system, and by solving the system we find lambda1, lambda2 and check that 0<lambda1+lambda2<1 and 0<lambda1<1 and and 0<lambda2<1
                     // Or just 0<lambda1, 0<lambda2 and lambda1+lambda2<1

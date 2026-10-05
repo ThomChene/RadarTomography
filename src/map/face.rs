@@ -85,6 +85,8 @@ impl<'a ,T:NdFloat> Face<T>{
                 option = Some((amplitude, distance, rec.index_receiver));},
         }
         let new_direction = direction*(-T::one());
+
+        // if the amplitude of the ray is too low, does not create it
         if new_amplitude*amplitude > min_amplitude_ray{
             let out_ray= Ray::new(new_amplitude*amplitude, closest_dist + distance, intersection_face_ray, new_direction, min_amplitude_ray);
             (vec!(out_ray), option)
